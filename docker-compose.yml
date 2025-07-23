@@ -1,0 +1,174 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+    container_name: frontend
+    ports:
+      - "8080:80"
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+    networks:
+      - red-auth
+    depends_on:
+      - api
+  
+  api:
+    build: ./backend
+    container_name: fastapi-auth
+    ports:
+      - "8000:8000"
+    environment:
+      - EMQX_API_BASE=http://emqx:8081/api/v4
+      - EMQX_MANAGEMENT__DEFAULT_APPLICATION__USERNAME=admin
+      - EMQX_MANAGEMENT__DEFAULT_APPLICATION__PASSWORD=admin123..
+      - INFLUX_ADMIN_TOKEN=admin123        # Asegúrate de que este valor coincida
+      - INFLUX_URL=http://influxdb:8086
+      - INFLUX_ORG=my-org
+      - INFLUX_BUCKET=measurements
+    depends_on:
+      mongo:
+        condition: service_healthy
+      emqx:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    networks:
+      - red-auth
+
+  mongo:
+    image: mongo:6.0
+    container_name: auth-mongo
+    restart: always
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=root
+      - MONGO_INITDB_ROOT_PASSWORD=example
+    ports:
+      - "27017:27017"      
+    volumes:
+      - auth-mongo-data:/data/db
+    networks:
+      - red-auth
+    healthcheck:
+      test: ["CMD", "mongosh", "mongodb://root:example@localhost:27017/admin", "--quiet", "--eval", "db.runCommand({ ping: 1 })"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  mongo-express:
+    image: mongo-express
+    container_name: mongo-express
+    restart: always
+    ports:
+      - "8082:8082"
+    environment:
+      - ME_CONFIG_MONGODB_SERVER=mongo         
+      - ME_CONFIG_MONGODB_ADMINUSERNAME=root
+      - ME_CONFIG_MONGODB_ADMINPASSWORD=example
+      - ME_CONFIG_BASICAUTH_USERNAME=admin
+      - ME_CONFIG_BASICAUTH_PASSWORD=admin
+    command: ["node", "app", "--port", "8082"]
+    depends_on:
+      - mongo
+    networks:
+      - red-auth
+
+  emqx:
+    image: emqx/emqx:4.4.18
+    container_name: emqx
+    restart: unless-stopped
+    networks:
+      - red-auth
+    ports:
+      - "1883:1883"
+      - "8083:8083"
+      - "18083:18083"
+      - "8081:8081"
+    environment:
+      - EMQX_NAME=emqx
+      - EMQX_ALLOW_ANONYMOUS=false
+      - EMQX_LOADED_PLUGINS=emqx_management,emqx_dashboard,emqx_auth_mongo
+      - EMQX_LOG__LEVEL=debug
+
+      - EMQX_AUTH__MONGO__ENABLE=true
+      - EMQX_AUTH__MONGO__SERVER=mongo:27017      # <-- CAMBIADO a 'mongo'
+      - EMQX_AUTH__MONGO__USERNAME=root
+      - EMQX_AUTH__MONGO__PASSWORD=example
+      - EMQX_AUTH__MONGO__DATABASE=iot
+
+      - EMQX_AUTH__MONGO__AUTH_QUERY__COLLECTION=mqtt_user
+      - EMQX_AUTH__MONGO__AUTH_QUERY__SELECTOR=username=%u
+      - EMQX_AUTH__MONGO__AUTH_QUERY__PASSWORD_FIELD=password
+      - EMQX_AUTH__MONGO__AUTH_QUERY__PASSWORD_HASH=bcrypt
+
+      - EMQX_AUTH__MONGO__ACL_QUERY=on
+      - EMQX_AUTH__MONGO__ACL_QUERY__DATABASE=iot
+      - EMQX_AUTH__MONGO__ACL_QUERY__COLLECTION=mqtt_acl
+      - EMQX_AUTH__MONGO__ACL_QUERY__SELECTOR=username=%u
+      - EMQX_AUTH__MONGO__ACL_QUERY__TOPIC_FIELD=topic
+
+      - EMQX_AUTH__MONGO__ACL_QUERY__CACHE_ENABLE=false
+      - EMQX_AUTH__MONGO__ACL_QUERY__TOPIC_FUZZY=true
+
+      - EMQX_DASHBOARD__DEFAULT_USER__PASSWORD=admin123..
+      - EMQX_MANAGEMENT__DEFAULT_APPLICATION__SECRET=admin123..
+    depends_on:
+      - mongo
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  influxdb:
+    image: influxdb:2.6
+    container_name: influxdb
+    restart: always
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=admin123..
+      - DOCKER_INFLUXDB_INIT_ORG=my-org
+      - DOCKER_INFLUXDB_INIT_BUCKET=measurements
+      - DOCKER_INFLUXDB_INIT_RETENTION=7d
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=admin123
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    networks:
+      - red-auth
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  grafana:
+    image: grafana/grafana-oss
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+        - GRAFANA_ADMIN_USER=admin
+        - GRAFANA_ADMIN_PASSWORD=admin123..
+        - GRAFANA_URL=http://grafana:3000
+        - GF_SECURITY_ADMIN_USER=admin
+        - GF_SECURITY_ADMIN_PASSWORD=admin123..
+        - GF_AUTH_ANONYMOUS_ENABLED=false
+        - GF_AUTH_BASIC_ENABLED=true
+    volumes:
+        - grafana-data:/var/lib/grafana
+    networks:
+        - red-auth
+
+volumes:
+  auth-mongo-data:
+  influxdb-data:
+  grafana-data:
+
+networks:
+  red-auth:
+    driver: bridge
