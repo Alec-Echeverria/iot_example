@@ -43,7 +43,8 @@ async def crear_dispositivo(
     # 3. Insertar usuario MQTT
     await db["mqtt_user"].insert_one({
         "username": mqtt_username,
-        "password": hashed
+        "password": hashed,
+        "plain_password": raw_mqtt_password  # ⚠️ Solo para pruebas, no recomendado en producción
     })
     
     # 4. Crear ACL para publicación y suscripción

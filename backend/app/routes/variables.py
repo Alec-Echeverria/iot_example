@@ -1,67 +1,64 @@
-from fastapi import APIRouter, HTTPException, Depends
-from app.routes.auth import get_current_user
+from fastapi import APIRouter, Depends, HTTPException
+from bson import ObjectId
 from app.models.schemas import VariableIn
 from app.utils.db import get_db
+from app.routes.auth import get_current_user
 
 router = APIRouter()
 
-# Crear una variable
+# 📌 Crear una variable
 @router.post("/variables")
-async def agregar_variable(variable: VariableIn, user: dict = Depends(get_current_user)):
-    db = get_db()
-    if db is None:
-        raise HTTPException(status_code=500, detail="Base de datos no inicializada")
-
-    # Validar que el dispositivo existe y pertenece al usuario autenticado
-    dispositivo = await db["dispositivos"].find_one({
-        "device_id": variable.device_id,
-        "username": user["username"]
-    })
-
-    if not dispositivo:
-        raise HTTPException(status_code=404, detail="Dispositivo no encontrado o no autorizado")
-
-    # Validar si ya existe una variable con el mismo variable_name y device_id para este usuario
-    variable_existente = await db["variables"].find_one({
-        "device_id": variable.device_id,
-        "variable_name": variable.variable_name,
-        "username": user["username"]
-    })
-
-    if variable_existente:
-        raise HTTPException(status_code=400, detail="Ya existe una variable con ese nombre para el mismo dispositivo")
-
-    # Insertar la nueva variable
+async def agregar_variable(
+    variable: VariableIn,
+    db=Depends(get_db),
+    current_user=Depends(get_current_user)
+):
     nueva_variable = {
         "device_id": variable.device_id,
-        "username": user["username"],
         "variable_name": variable.variable_name,
         "unit": variable.unit,
         "description": variable.description,
-        "sampling_ms": variable.sampling_ms
+        "sampling_ms": variable.sampling_ms,
+        "username": current_user["username"]
     }
 
-    await db["variables"].insert_one(nueva_variable)
-    return {"message": "Variable registrada correctamente"}
+    # Validación opcional: evitar duplicados
+    existe = await db["variables"].find_one({
+        "device_id": variable.device_id,
+        "variable_name": variable.variable_name,
+        "username": current_user["username"]
+    })
+    if existe:
+        raise HTTPException(status_code=400, detail="Ya existe una variable con ese nombre para ese dispositivo")
 
-# Obtener todas las variables del usuario autenticado
+    resultado = await db["variables"].insert_one(nueva_variable)
+    nueva_variable["_id"] = str(resultado.inserted_id)
+    return nueva_variable
+
+# 📌 Listar variables por usuario
 @router.get("/variables")
-async def obtener_variables(user: dict = Depends(get_current_user)):
-    db = get_db()
-    if db is None:
-        raise HTTPException(status_code=500, detail="Base de datos no inicializada")
-
-    variables_cursor = db["variables"].find({"username": user["username"]})
+async def listar_variables(
+    db=Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    cursor = db["variables"].find({"username": current_user["username"]})
     variables = []
-    async for variable in variables_cursor:
-        variables.append({
-            "id": str(variable["_id"]),
-            "device_id": variable.get("device_id"),
-            "variable_name": variable.get("variable_name"),
-            "unit": variable.get("unit"),
-            "description": variable.get("description"),
-            "sampling_ms": variable.get("sampling_ms"),
-            "username": variable.get("username")
-        })
+    async for variable in cursor:
+        variable["_id"] = str(variable["_id"])
+        variables.append(variable)
     return variables
 
+# 📌 Eliminar variable por ID
+@router.delete("/variables/{id}")
+async def eliminar_variable(
+    id: str,
+    db=Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    resultado = await db["variables"].delete_one({
+        "_id": ObjectId(id),
+        "username": current_user["username"]
+    })
+    if resultado.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Variable no encontrada o no autorizada")
+    return {"message": "Variable eliminada correctamente"}

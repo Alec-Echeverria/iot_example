@@ -59,7 +59,7 @@ class VariableIn(BaseModel):
     variable_name: str
     unit: str
     description:str
-    sampling_ms:str
+    sampling_ms:int
 
 class MqttMessage(BaseModel):
     topic: str
